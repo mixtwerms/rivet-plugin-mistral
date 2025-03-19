@@ -1,0 +1,25 @@
+{
+  "name": "mistral-rivet-plugin",
+  "version": "0.1.0",
+  "description": "Mistral AI plugin for Rivet",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "npx esbuild src/index.ts --bundle --outfile=dist/index.js --platform=neutral --format=esm --external:@ironclad/rivet-core --external:@ironclad/rivet-node --external:ts-dedent --external:nanoid --external:p-retry --external:ts-pattern",
+    "dev": "npx esbuild src/index.ts --bundle --outfile=dist/index.js --platform=neutral --format=esm --external:@ironclad/rivet-core --external:@ironclad/rivet-node --external:ts-dedent --external:nanoid --external:p-retry --external:ts-pattern --watch=forever & (while true; do yarn sync; sleep 2; done)",
+    "sync": "mkdir -p \"$HOME/Library/Application Support/com.ironcladapp.rivet/plugins/mistral-rivet-plugin-latest/package\" && cp -R dist \"$HOME/Library/Application Support/com.ironcladapp.rivet/plugins/mistral-rivet-plugin-latest/package/\" && cp package.json \"$HOME/Library/Application Support/com.ironcladapp.rivet/plugins/mistral-rivet-plugin-latest/package/\"",
+    "start": "yarn build && yarn sync"
+  },
+  "devDependencies": {
+    "esbuild": "^0.19.2",
+    "typescript": "^5.2.2"
+  },
+  "dependencies": {
+    "@ironclad/rivet-core": "^1.0.0",
+    "nanoid": "^4.0.0",
+    "p-retry": "^6.0.0",
+    "ts-dedent": "^2.2.0",
+    "ts-pattern": "^5.0.0"
+  }
+}
