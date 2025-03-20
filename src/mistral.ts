@@ -1,121 +1,293 @@
+import type { 
+  ChatMessage as RivetChatMessage, 
+  SystemChatMessage, 
+  UserChatMessage, 
+  AssistantChatMessage 
+} from '@ironclad/rivet-core';
+
+export type ToolCall = {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+};
+
+// Mistral's message format
+export type MistralMessage = {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+  tool_calls?: ToolCall[];
+};
+
 export type MistralModel = {
-    maxTokens: number;
-    cost: {
-      prompt: number;
-      completion: number;
+  maxTokens: number;
+  cost: {
+    prompt: {
+      USD: string;
+      EUR: string;
     };
-    displayName: string;
+    completion: {
+      USD: string;
+      EUR: string;
+    };
   };
-  
-  export const mistralModels = {
-    'mistral-tiny-latest': {
-      maxTokens: 32000,
-      cost: {
-        prompt: 0.00014,
-        completion: 0.00042,
+  displayName: string;
+  contextLength: number;
+};
+
+export const mistralModels = {
+  // Premier models
+  'mistral-large-latest': {
+    maxTokens: 131072,
+    cost: {
+      prompt: {
+        USD: "$2",
+        EUR: "1.8 €"
       },
-      displayName: 'Mistral Tiny',
-    },
-    'mistral-small-latest': {
-      maxTokens: 32000,
-      cost: {
-        prompt: 0.00027,
-        completion: 0.00081,
-      },
-      displayName: 'Mistral Small',
-    },
-    'mistral-medium-latest': {
-      maxTokens: 32000,
-      cost: {
-        prompt: 0.00381,
-        completion: 0.01143,
-      },
-      displayName: 'Mistral Medium',
-    },
-  } as const;
-  
-  export type MistralModels = keyof typeof mistralModels;
-  
-  export const mistralModelOptions = Object.entries(mistralModels).map(([id, { displayName }]) => ({
-    value: id,
-    label: displayName,
-  }));
-  
-  export type ChatCompletionOptions = {
-    model: MistralModels;
-    messages: Array<{
-      role: 'user' | 'assistant' | 'system';
-      content: string;
-    }>;
-    temperature?: number;
-    maxTokens?: number;
-    topP?: number;
-    stream?: boolean;
-    apiKey: string;
-    signal?: AbortSignal;
-  };
-  
-  export type ChatCompletionChunk = {
-    id: string;
-    choices: Array<{
-      index: number;
-      delta: {
-        content?: string;
-      };
-      finish_reason: string | null;
-    }>;
-  };
-  
-  export async function* streamChatCompletions(options: ChatCompletionOptions): AsyncGenerator<ChatCompletionChunk> {
-    const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${options.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: options.model,
-        messages: options.messages,
-        temperature: options.temperature,
-        max_tokens: options.maxTokens,
-        top_p: options.topP,
-        stream: true,
-      }),
-      signal: options.signal,
-    });
-  
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Mistral API error: ${response.status} - ${text}`);
-    }
-  
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error('No response body');
-  
-    const decoder = new TextDecoder();
-    let buffer = '';
-  
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-  
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-  
-      for (const line of lines) {
-        if (line.trim() === '') continue;
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6);
-          if (data === '[DONE]') continue;
-          try {
-            const json = JSON.parse(data);
-            yield json;
-          } catch (e) {
-            console.error('Error parsing JSON from stream:', e);
-          }
-        }
+      completion: {
+        USD: "$6",
+        EUR: "5.4 €"
       }
-    }
-  }
+    },
+    displayName: 'Mistral Large 24.11',
+    contextLength: 131072,
+  },
+  'pixtral-large-latest': {
+    maxTokens: 131072,
+    cost: {
+      prompt: {
+        USD: "$2",
+        EUR: "1.8 €"
+      },
+      completion: {
+        USD: "$6",
+        EUR: "5.4 €"
+      }
+    },
+    displayName: 'Pixtral Large',
+    contextLength: 131072,
+  },
+  'mistral-saba-latest': {
+    maxTokens: 32768,
+    cost: {
+      prompt: {
+        USD: "$0.2",
+        EUR: "0.2 €"
+      },
+      completion: {
+        USD: "$0.6",
+        EUR: "0.6 €"
+      }
+    },
+    displayName: 'Mistral Saba',
+    contextLength: 32768,
+  },
+  'codestral-latest': {
+    maxTokens: 262144, // 256k
+    cost: {
+      prompt: {
+        USD: "$0.3",
+        EUR: "0.3 €"
+      },
+      completion: {
+        USD: "$0.9",
+        EUR: "0.9 €"
+      }
+    },
+    displayName: 'Codestral',
+    contextLength: 262144,
+  },
+  'ministral-8b-latest': {
+    maxTokens: 131072,
+    cost: {
+      prompt: {
+        USD: "$0.1",
+        EUR: "0.09 €"
+      },
+      completion: {
+        USD: "$0.1",
+        EUR: "0.09 €"
+      }
+    },
+    displayName: 'Ministral 8B 24.10',
+    contextLength: 131072,
+  },
+  'ministral-3b-latest': {
+    maxTokens: 131072,
+    cost: {
+      prompt: {
+        USD: "$0.04",
+        EUR: "0.04 €"
+      },
+      completion: {
+        USD: "$0.04",
+        EUR: "0.04 €"
+      }
+    },
+    displayName: 'Ministral 3B 24.10',
+    contextLength: 131072,
+  },
+  'mistral-embed': {
+    maxTokens: 8192,
+    cost: {
+      prompt: {
+        USD: "$0.1",
+        EUR: "0.09 €"
+      },
+      completion: {
+        USD: "-",
+        EUR: "-"
+      }
+    },
+    displayName: 'Mistral Embed',
+    contextLength: 8192,
+  },
+  'mistral-moderation-latest': {
+    maxTokens: 8192,
+    cost: {
+      prompt: {
+        USD: "$0.1",
+        EUR: "0.09 €"
+      },
+      completion: {
+        USD: "-",
+        EUR: "-"
+      }
+    },
+    displayName: 'Mistral Moderation 24.11',
+    contextLength: 8192,
+  },
+  'mistral-ocr-latest': {
+    maxTokens: 0, // Not applicable for OCR
+    cost: {
+      prompt: {
+        USD: "1000 Pages / $1",
+        EUR: "1000 Pages / 1€"
+      },
+      completion: {
+        USD: "-",
+        EUR: "-"
+      }
+    },
+    displayName: 'Mistral OCR',
+    contextLength: 0,
+  },
   
+  // Other models
+  'mistral-small-latest': {
+    maxTokens: 131072,
+    cost: {
+      prompt: {
+        USD: "$0.1",
+        EUR: "0.09 €"
+      },
+      completion: {
+        USD: "$0.3",
+        EUR: "0.27 €"
+      }
+    },
+    displayName: 'Mistral Small',
+    contextLength: 131072,
+  },
+  'open-mistral-7b': {
+    maxTokens: 32768,
+    cost: {
+      prompt: {
+        USD: "$0.25",
+        EUR: "0.23 €"
+      },
+      completion: {
+        USD: "$0.25",
+        EUR: "0.23 €"
+      }
+    },
+    displayName: 'Open Mistral 7B',
+    contextLength: 32768,
+  },
+  'open-mixtral-8x7b': {
+    maxTokens: 32768,
+    cost: {
+      prompt: {
+        USD: "$0.7",
+        EUR: "0.63 €"
+      },
+      completion: {
+        USD: "$0.7",
+        EUR: "0.63 €"
+      }
+    },
+    displayName: 'Open Mixtral 8x7B',
+    contextLength: 32768,
+  },
+  'open-mixtral-8x22b': {
+    maxTokens: 64000,
+    cost: {
+      prompt: {
+        USD: "$2",
+        EUR: "1.8 €"
+      },
+      completion: {
+        USD: "$6",
+        EUR: "5.4 €"
+      }
+    },
+    displayName: 'Open Mixtral 8x22B',
+    contextLength: 64000,
+  },
+} as const;
+
+
+export type MistralModels = keyof typeof mistralModels;
+
+export const mistralModelOptions = Object.entries(mistralModels).map(([id, { displayName }]) => ({
+  value: id,
+  label: displayName,
+}));
+
+export function convertToMistralMessage(rivetMessage: RivetChatMessage): MistralMessage {
+  // Ensure we only use valid Mistral roles
+  let role: 'system' | 'user' | 'assistant';
+  switch (rivetMessage.type) {
+    case 'system':
+      role = 'system';
+      break;
+    case 'user':
+      role = 'user';
+      break;
+    case 'assistant':
+      role = 'assistant';
+      break;
+    default:
+      role = 'user'; // Default to user for any other type
+  }
+
+  return {
+    role,
+    content: typeof rivetMessage.message === 'string' ? rivetMessage.message : rivetMessage.message.toString()
+  };
+}
+
+export function createAssistantMessage(content: string): AssistantChatMessage {
+  return {
+    type: 'assistant',
+    message: content,
+    function_call: undefined,
+    function_calls: [],
+  };
+}
+
+export function createSystemMessage(content: string): SystemChatMessage {
+  return {
+    type: 'system',
+    message: content,
+  };
+}
+
+export function createUserMessage(content: string): UserChatMessage {
+  return {
+    type: 'user',
+    message: content,
+  };
+}

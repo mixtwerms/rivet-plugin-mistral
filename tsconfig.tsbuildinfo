@@ -1,0 +1,1 @@
+{"root":["./bundle.ts","./src/index.ts","./src/mistral.ts","./src/nodeentry.ts","./src/impl/mistralapi.ts","./src/nodes/mistralchatnode.ts"],"version":"5.8.2"}

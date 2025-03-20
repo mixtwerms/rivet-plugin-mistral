@@ -1,89 +1,87 @@
 import type {
-    ChartNode,
-    ChatMessage,
-    EditorDefinition,
-    Inputs,
-    InternalProcessContext,
-    NodeId,
-    NodeInputDefinition,
-    NodeOutputDefinition,
-    NodeUIData,
-    Outputs,
-    PluginNodeImpl,
-    PortId,
-    ScalarDataValue,
-  } from '@ironclad/rivet-core';
-  import { nanoid } from 'nanoid/non-secure';
-  import { dedent } from 'ts-dedent';
-  import retry from 'p-retry';
-  import { match } from 'ts-pattern';
-  import { streamChatCompletions, type MistralModels, mistralModels, mistralModelOptions } from '../mistral.js';
-  import { coerceType, coerceTypeOptional } from '@ironclad/rivet-core';
-  import { getInputOrData } from '@ironclad/rivet-core';
-  import { isArrayDataValue, getScalarTypeOf } from '@ironclad/rivet-core';
-  
-  // Node type definitions
-  export type MistralChatNode = ChartNode<'mistralChat', MistralChatNodeData>;
-  
-  export type MistralChatNodeConfigData = {
-    model: MistralModels;
-    temperature: number;
-    maxTokens: number;
-    topP: number;
-    systemPrompt: string;
-  };
-  
-  export type MistralChatNodeData = MistralChatNodeConfigData & {
-    useModelInput: boolean;
-    useTemperatureInput: boolean;
-    useMaxTokensInput: boolean;
-    useTopPInput: boolean;
-    useSystemPromptInput: boolean;
-    useMessagesInput: boolean;
-    cache: boolean;
-    useAsGraphPartialOutput?: boolean;
-  };
-  
-  // Temporary cache for responses
-  const cache = new Map<string, Outputs>();
-  
-  export const MistralChatNodeImpl: PluginNodeImpl<MistralChatNode> = {
+  ChartNode,
+  EditorDefinition,
+  Inputs,
+  InternalProcessContext,
+  NodeId,
+  NodeInputDefinition,
+  NodeOutputDefinition,
+  NodeUIData,
+  Outputs,
+  PluginNodeImpl,
+  PortId,
+  Rivet,
+  ChatMessage as RivetChatMessage,
+} from '@ironclad/rivet-core';
+import { match } from 'ts-pattern';
+import { 
+  mistralModels, 
+  mistralModelOptions, 
+  type MistralModels, 
+  type MistralMessage,
+  convertToMistralMessage,
+  createAssistantMessage,
+  createSystemMessage,
+  createUserMessage,
+} from '../mistral.js';
+
+export type MistralChatNode = ChartNode<'mistralChat', MistralChatNodeData>;
+
+export type MistralChatNodeData = {
+  model: MistralModels;
+  useModelInput: boolean;
+  temperature: number;
+  useTemperatureInput: boolean;
+  maxTokens: number;
+  useMaxTokensInput: boolean;
+  topP: number;
+  useTopPInput: boolean;
+  systemPrompt: string;
+  useSystemPromptInput: boolean;
+  useMessagesInput: boolean;
+  useStream: boolean;
+  useSafePrompt: boolean;
+  useRandomSeed?: boolean;
+  randomSeed?: number;
+  currency: 'USD' | 'EUR'; // Add currency preference
+};
+
+export default function (rivet: typeof Rivet) {
+  const nodeImpl: PluginNodeImpl<MistralChatNode> = {
     create(): MistralChatNode {
       return {
-        id: nanoid() as NodeId,
+        id: rivet.newId<NodeId>(),
         type: 'mistralChat',
         title: 'Mistral Chat',
         data: {
           model: 'mistral-small-latest',
           useModelInput: false,
-  
           temperature: 0.7,
           useTemperatureInput: false,
-  
           maxTokens: 1024,
           useMaxTokensInput: false,
-  
           topP: 1,
           useTopPInput: false,
-  
           systemPrompt: 'You are a helpful assistant.',
-          useSystemPromptInput: false,
-  
+          useSystemPromptInput: true,
           useMessagesInput: false,
-          cache: false,
-          useAsGraphPartialOutput: true,
+          useStream: true,
+          useSafePrompt: false,
+          useRandomSeed: false,
+          randomSeed: undefined,
+          currency: 'USD', // Default to USD
         },
         visualData: {
           x: 0,
           y: 0,
-          width: 275,
+          width: 300,
         },
       };
     },
-  
+
     getInputDefinitions(data): NodeInputDefinition[] {
       const inputs: NodeInputDefinition[] = [];
-  
+
       if (data.useModelInput) {
         inputs.push({
           id: 'model' as PortId,
@@ -92,7 +90,7 @@ import type {
           required: false,
         });
       }
-  
+
       if (data.useSystemPromptInput) {
         inputs.push({
           id: 'systemPrompt' as PortId,
@@ -101,7 +99,7 @@ import type {
           required: false,
         });
       }
-  
+
       if (data.useTemperatureInput) {
         inputs.push({
           dataType: 'number',
@@ -109,7 +107,7 @@ import type {
           title: 'Temperature',
         });
       }
-  
+
       if (data.useTopPInput) {
         inputs.push({
           dataType: 'number',
@@ -117,7 +115,7 @@ import type {
           title: 'Top P',
         });
       }
-  
+
       if (data.useMaxTokensInput) {
         inputs.push({
           dataType: 'number',
@@ -125,7 +123,7 @@ import type {
           title: 'Max Tokens',
         });
       }
-  
+
       if (data.useMessagesInput) {
         inputs.push({
           dataType: 'chat-message[]',
@@ -134,15 +132,15 @@ import type {
         });
       } else {
         inputs.push({
-          dataType: ['chat-message', 'chat-message[]', 'string', 'string[]'] as const,
+          dataType: ['chat-message', 'chat-message[]', 'string', 'string[]'],
           id: 'prompt' as PortId,
           title: 'Prompt',
         });
       }
-  
+
       return inputs;
     },
-  
+
     getOutputDefinitions(): NodeOutputDefinition[] {
       return [
         {
@@ -156,13 +154,18 @@ import type {
           dataType: 'chat-message',
         },
         {
-          id: 'all-messages' as PortId,
+          id: 'messages' as PortId,
           title: 'All Messages',
           dataType: 'chat-message[]',
         },
+        {
+          id: 'tokenDetails' as PortId,
+          title: 'Token Details',
+          dataType: 'object',
+        },
       ];
     },
-  
+
     getEditors(): EditorDefinition<MistralChatNode>[] {
       return [
         {
@@ -177,7 +180,6 @@ import type {
           label: 'System Prompt',
           dataKey: 'systemPrompt',
           useInputToggleDataKey: 'useSystemPromptInput',
-          multiline: true,
         },
         {
           type: 'number',
@@ -185,7 +187,7 @@ import type {
           dataKey: 'temperature',
           useInputToggleDataKey: 'useTemperatureInput',
           min: 0,
-          max: 2,
+          max: 1.5,
           step: 0.1,
         },
         {
@@ -202,7 +204,7 @@ import type {
           label: 'Max Tokens',
           dataKey: 'maxTokens',
           useInputToggleDataKey: 'useMaxTokensInput',
-          min: 1,
+          min: 0,
           step: 1,
         },
         {
@@ -212,247 +214,322 @@ import type {
         },
         {
           type: 'toggle',
-          label: 'Cache (same inputs, same outputs)',
-          dataKey: 'cache',
+          label: 'Stream Responses',
+          dataKey: 'useStream',
         },
         {
           type: 'toggle',
-          label: 'Use for subgraph partial output',
-          dataKey: 'useAsGraphPartialOutput',
+          label: 'Use Safe Prompt',
+          dataKey: 'useSafePrompt',
+        },
+        {
+          type: 'toggle',
+          label: 'Use Random Seed',
+          dataKey: 'useRandomSeed',
+        },
+        {
+          type: 'number',
+          label: 'Random Seed',
+          dataKey: 'randomSeed',
+          min: 0,
+          step: 1,
+        },
+        {
+          type: 'dropdown',
+          label: 'Currency',
+          dataKey: 'currency',
+          options: [
+            { value: 'USD', label: 'USD ($)' },
+            { value: 'EUR', label: 'EUR (€)' },
+          ],
         },
       ];
     },
-  
+
     getUIData(): NodeUIData {
       return {
         contextMenuTitle: 'Mistral Chat',
-        group: ['AI', 'Mistral'],
-        infoBoxBody: dedent`
-          Makes a call to a Mistral AI chat model. Supports all available Mistral models
-          and includes various parameters for fine-tuning the response.
-        `,
+        group: 'AI/Chat (Mistral)',
+        infoBoxBody: `Makes a call to Mistral AI's chat completion API. Supports all available Mistral models and includes various parameters for fine-tuning the response.`,
         infoBoxTitle: 'Mistral Chat Node',
       };
     },
-  
+
     getBody(data): string {
-      return dedent`
-        Model: ${mistralModels[data.model]?.displayName ?? data.model}
-        Temperature: ${data.temperature}
-        Max Tokens: ${data.maxTokens}
-        Top P: ${data.topP}
-      `;
+      const modelInfo = mistralModels[data.model] || { 
+        displayName: data.model, 
+        cost: { 
+          prompt: { USD: "-", EUR: "-" }, 
+          completion: { USD: "-", EUR: "-" } 
+        } 
+      };
+      
+      // Get pricing for the selected currency
+      const promptPrice = modelInfo.cost.prompt[data.currency];
+      const completionPrice = modelInfo.cost.completion[data.currency];
+      
+      return `Model: ${modelInfo.displayName}
+Temperature: ${data.temperature}
+Max Tokens: ${data.maxTokens}
+Top P: ${data.topP}
+${promptPrice}/1M prompt tokens
+${completionPrice}/1M completion tokens`;
     },
-  
+
     async process(data, inputs: Inputs, context: InternalProcessContext): Promise<Outputs> {
-      const output: Outputs = {};
-  
       try {
-        return await retry(
-          async () => {
-            // Get API key from plugin config
-            const apiKey = context.getPluginConfig('mistralApiKey');
-            if (!apiKey) {
-              throw new Error('Mistral API key not configured. Please add your API key in the plugin configuration.');
-            }
-  
-            // Get input values with fallbacks to node data
-            const model = getInputOrData(data, inputs, 'model', 'string') ?? data.model;
-            const temperature = getInputOrData(data, inputs, 'temperature', 'number') ?? data.temperature;
-            const maxTokens = getInputOrData(data, inputs, 'maxTokens', 'number') ?? data.maxTokens;
-            const topP = getInputOrData(data, inputs, 'topP', 'number') ?? data.topP;
-            const systemPrompt = getInputOrData(data, inputs, 'systemPrompt', 'string') ?? data.systemPrompt;
-  
-            // Prepare messages array
-            let messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [];
-  
-            // Handle messages input if enabled
-            if (data.useMessagesInput && inputs['messages' as PortId]) {
-              const inputMessages = coerceType(inputs['messages' as PortId], 'chat-message[]');
-              if (!inputMessages) {
-                throw new Error('Invalid messages input format');
-              }
-  
-              messages = inputMessages.map(msg => ({
-                role: msg.type as 'user' | 'assistant' | 'system',
-                content: typeof msg.message === 'string' ? msg.message : msg.message.join(' ')
-              }));
-            } else {
-              // Add system message if provided
-              if (systemPrompt?.trim()) {
-                messages.push({
-                  role: 'system',
-                  content: systemPrompt
-                });
-              }
-  
-              // Handle prompt input
-              const promptInput = inputs['prompt' as PortId];
-              if (!promptInput) {
-                throw new Error('No prompt provided. Please connect a string to the prompt input.');
-              }
-  
-              // Convert prompt input to messages
-              const chatMessages = match(promptInput)
-                .with({ type: 'chat-message' }, (p) => [p.value])
-                .with({ type: 'chat-message[]' }, (p) => p.value)
-                .with({ type: 'string' }, (p): ChatMessage[] => [{ type: 'user', message: p.value }])
-                .with({ type: 'string[]' }, (p): ChatMessage[] => p.value.map((v) => ({ type: 'user', message: v })))
-                .otherwise((p): ChatMessage[] => {
-                  if (isArrayDataValue(p)) {
-                    const stringValues = (p.value as readonly unknown[]).map((v) =>
-                      coerceType(
-                        {
-                          type: getScalarTypeOf(p.type),
-                          value: v,
-                        } as ScalarDataValue,
-                        'string',
-                      ),
-                    );
-                    return stringValues.filter((v) => v != null).map((v) => ({ type: 'user', message: v }));
+        console.log("Starting Mistral Chat node processing...");
+        
+        const apiKey = context.getPluginConfig('mistralApiKey');
+        if (!apiKey) {
+          throw new Error('Mistral API key not configured. Please add your API key in the plugin configuration.');
+        }
+
+        const model = rivet.getInputOrData(data, inputs, 'model', 'string') ?? data.model;
+        const temperature = rivet.getInputOrData(data, inputs, 'temperature', 'number') ?? data.temperature;
+        const maxTokens = rivet.getInputOrData(data, inputs, 'maxTokens', 'number') ?? data.maxTokens;
+        const topP = rivet.getInputOrData(data, inputs, 'topP', 'number') ?? data.topP;
+        const systemPrompt = rivet.getInputOrData(data, inputs, 'systemPrompt', 'string') ?? data.systemPrompt;
+        
+        let messages: MistralMessage[] = [];
+
+        if (systemPrompt?.trim()) {
+          messages.push({
+            role: 'system',
+            content: systemPrompt,
+          });
+        }
+
+        if (data.useMessagesInput) {
+          const inputMessages = rivet.coerceType(inputs['messages' as PortId], 'chat-message[]');
+          if (!inputMessages) {
+            throw new Error('Invalid messages input format');
+          }
+
+          messages.push(...inputMessages.map(msg => ({
+            role: msg.type as 'system' | 'user' | 'assistant',
+            content: typeof msg.message === 'string' ? msg.message : msg.message.toString(),
+          })));
+        } else {
+          const promptInput = inputs['prompt' as PortId];
+          if (!promptInput) {
+            throw new Error('No prompt provided');
+          }
+          
+          let userMessages: RivetChatMessage[] = [];
+          
+          if (promptInput.type === 'chat-message') {
+            userMessages = [promptInput.value];
+          } else if (promptInput.type === 'chat-message[]') {
+            userMessages = promptInput.value;
+          } else if (promptInput.type === 'string') {
+            userMessages = [createUserMessage(promptInput.value)];
+          } else if (promptInput.type === 'string[]') {
+            userMessages = promptInput.value.map(v => createUserMessage(v));
+          } else {
+            throw new Error(`Invalid prompt format: ${promptInput.type}`);
+          }
+
+          messages.push(...userMessages.map(convertToMistralMessage));
+        }
+
+        const requestBody = {
+          model,
+          messages,
+          temperature,
+          max_tokens: maxTokens,
+          top_p: topP,
+          stream: data.useStream,
+          safe_prompt: data.useSafePrompt,
+          random_seed: data.useRandomSeed ? data.randomSeed : undefined,
+        };
+
+        const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error("Mistral API error:", response.status, errorText);
+          throw new Error(`Mistral API error: ${response.status} - ${errorText}`);
+        }
+
+        const output: Outputs = {};
+
+        if (data.useStream) {
+          const reader = response.body?.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          const responseParts: string[] = [];
+
+          if (!reader) {
+            throw new Error('No response body');
+          }
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+              if (line.trim() === '') continue;
+              if (line.startsWith('data: ')) {
+                const data = line.slice(6);
+                if (data === '[DONE]') continue;
+                try {
+                  const json = JSON.parse(data);
+                  const content = json.choices[0]?.delta?.content;
+                  if (content) {
+                    responseParts.push(content);
+                    
+                    const currentResponse = responseParts.join('');
+                    const assistantMessage = createAssistantMessage(currentResponse);
+
+                    output['response' as PortId] = {
+                      type: 'string',
+                      value: currentResponse,
+                    };
+
+                    output['message' as PortId] = {
+                      type: 'chat-message',
+                      value: assistantMessage,
+                    };
+
+                    output['messages' as PortId] = {
+                      type: 'chat-message[]',
+                      value: [
+                        ...messages.map(m => {
+                          if (m.role === 'system') return createSystemMessage(m.content);
+                          if (m.role === 'user') return createUserMessage(m.content);
+                          return createAssistantMessage(m.content);
+                        }),
+                        assistantMessage,
+                      ],
+                    };
+
+                    context.onPartialOutputs?.(output);
                   }
-                  const coercedMessage = coerceType(p, 'chat-message');
-                  if (coercedMessage != null) {
-                    return [coercedMessage];
-                  }
-                  const coercedString = coerceType(p, 'string');
-                  return coercedString != null ? [{ type: 'user', message: coerceType(p, 'string') }] : [];
-                });
-  
-              // Convert chat messages to Mistral format
-              messages.push(...chatMessages.map(msg => ({
-                role: msg.type as 'user' | 'assistant' | 'system',
-                content: typeof msg.message === 'string' ? msg.message : msg.message.join(' ')
-              })));
-            }
-  
-            // Prepare completion options
-            const completionOptions = {
-              model,
-              messages,
-              temperature,
-              maxTokens,
-              topP,
-              stream: true,
-              apiKey,
-              signal: context.signal,
-            };
-  
-            // Check cache if enabled
-            const cacheKey = JSON.stringify(completionOptions);
-            if (data.cache) {
-              const cached = cache.get(cacheKey);
-              if (cached) {
-                return cached;
-              }
-            }
-  
-            const startTime = Date.now();
-            const chunks = streamChatCompletions(completionOptions);
-  
-            // Process the response chunks
-            const responseParts: string[] = [];
-  
-            for await (const chunk of chunks) {
-              if (chunk.choices[0]?.delta?.content) {
-                responseParts.push(chunk.choices[0].delta.content);
-  
-                // Update partial outputs
-                output['response' as PortId] = {
-                  type: 'string',
-                  value: responseParts.join('').trim(),
-                };
-  
-                output['message' as PortId] = {
-                  type: 'chat-message',
-                  value: {
-                    type: 'assistant',
-                    message: responseParts.join('').trim(),
-                  },
-                };
-  
-                output['all-messages' as PortId] = {
-                  type: 'chat-message[]',
-                  value: [
-                    ...messages.map(m => ({
-                      type: m.role as 'user' | 'assistant' | 'system',
-                      message: m.content,
-                    })),
-                    {
-                      type: 'assistant',
-                      message: responseParts.join('').trim(),
-                    },
-                  ],
-                };
-  
-                if (data.useAsGraphPartialOutput) {
-                  context.onPartialOutputs?.(output);
+                } catch (e) {
+                  console.error('Error parsing JSON from stream:', e);
                 }
               }
             }
-  
-            if (responseParts.length === 0) {
-              throw new Error('No response received from Mistral');
-            }
-  
-            // Calculate token counts and costs
-            const tokenInfo = {
-              requestTokens: await context.tokenizer.getTokenCountForString(
-                messages.map(m => m.content).join(' '),
-                { node: context.node, model }
-              ),
-              responseTokens: await context.tokenizer.getTokenCountForString(
-                responseParts.join(''),
-                { node: context.node, model }
-              ),
-            };
-  
-            output['requestTokens' as PortId] = { type: 'number', value: tokenInfo.requestTokens };
-            output['responseTokens' as PortId] = { type: 'number', value: tokenInfo.responseTokens };
-  
-            // Calculate cost if model info is available
-            const modelInfo = mistralModels[model as MistralModels];
-            if (modelInfo) {
-              const cost =
-                modelInfo.cost.prompt * tokenInfo.requestTokens +
-                modelInfo.cost.completion * tokenInfo.responseTokens;
-              output['cost' as PortId] = { type: 'number', value: cost };
-            }
-  
-            // Add duration
-            output['duration' as PortId] = {
-              type: 'number',
-              value: Date.now() - startTime,
-            };
-  
-            // Cache the result if enabled
-            if (data.cache) {
-              Object.freeze(output);
-              cache.set(cacheKey, output);
-            }
-  
-            return output;
-          },
-          {
-            retries: 5,
-            factor: 2,
-            minTimeout: 1000,
-            maxTimeout: 60000,
-            randomize: true,
-            signal: context.signal,
-            onFailedAttempt(error) {
-              context.trace(`Mistral API call failed, retrying: ${error.toString()}`);
-              if (context.signal.aborted) {
-                throw new Error('Aborted');
-              }
-            },
           }
-        );
+
+          // For streaming, we don't have token information
+          output['tokenDetails' as PortId] = {
+            type: 'object',
+            value: {
+              note: "Token details not available in streaming mode",
+              prompt: 0,
+              completion: 0,
+              total: 0,
+              estimatedCostCents: 0,
+              currency: data.currency
+            }
+          };
+        } else {
+          const json = await response.json();
+          const content = json.choices[0]?.message?.content;
+          const promptTokens = json.usage.prompt_tokens;
+          const completionTokens = json.usage.completion_tokens;
+          const totalTokens = json.usage.total_tokens;
+          
+          // Calculate approximate cost
+          const modelInfo = mistralModels[model as MistralModels] || { 
+            cost: { 
+              prompt: { USD: "$0", EUR: "0 €" }, 
+              completion: { USD: "$0", EUR: "0 €" } 
+            } 
+          };
+
+          // Get the price for the selected currency
+          const promptPriceStr = modelInfo.cost.prompt[data.currency];
+          const completionPriceStr = modelInfo.cost.completion[data.currency];
+
+          // Parse the cost values (removing currency symbols and converting to number)
+          const promptCostPerMillion = parseFloat(promptPriceStr.replace(/[^0-9.]/g, ''));
+          const completionCostPerMillion = completionPriceStr === '-' ? 0 : parseFloat(completionPriceStr.replace(/[^0-9.]/g, ''));
+
+          // Special case for OCR which is priced per page
+          let totalCostCents = 0;
+          
+          if (model === 'mistral-ocr-latest') {
+            // OCR cost calculation would go here
+            // This is a placeholder since OCR doesn't use token-based pricing
+            totalCostCents = 0; // We'd need a different calculation for OCR
+          } else {
+            // Regular token-based cost calculation
+            const promptCost = (promptTokens / 1000000) * promptCostPerMillion;
+            const completionCost = (completionTokens / 1000000) * completionCostPerMillion;
+            const totalCostDollars = promptCost + completionCost;
+            
+            // Convert to cents and round to 4 decimal places
+            totalCostCents = Number((totalCostDollars * 100).toFixed(4));
+          }
+          
+          // Currency label
+          const currencyLabel = data.currency === 'USD' ? 'cents' : 'euro cents';
+          
+          // Log detailed token and cost information
+          console.log(`Mistral API call:
+    Model: ${model}
+    Prompt tokens: ${promptTokens}
+    Completion tokens: ${completionTokens}
+    Total tokens: ${totalTokens}
+    Estimated cost: ${totalCostCents} ${currencyLabel}`);
+
+          const assistantMessage = createAssistantMessage(content);
+
+          output['response' as PortId] = {
+            type: 'string',
+            value: content,
+          };
+
+          output['message' as PortId] = {
+            type: 'chat-message',
+            value: assistantMessage,
+          };
+
+          output['messages' as PortId] = {
+            type: 'chat-message[]',
+            value: [
+              ...messages.map(m => {
+                if (m.role === 'system') return createSystemMessage(m.content);
+                if (m.role === 'user') return createUserMessage(m.content);
+                return createAssistantMessage(m.content);
+              }),
+              assistantMessage,
+            ],
+          };
+          
+          output['tokenDetails' as PortId] = {
+            type: 'object',
+            value: {
+              prompt: promptTokens,
+              completion: completionTokens,
+              total: totalTokens,
+              estimatedCostCents: totalCostCents,
+              currency: data.currency
+            }
+          };
+        }
+
+        return output;
       } catch (error) {
-        throw new Error(`Error in Mistral Chat Node: ${(error as Error).message}`);
+        console.error("Error in Mistral Chat node:", error);
+        throw error;
       }
     },
   };
-  
-  export const mistralChatNode = pluginNodeDefinition(MistralChatNodeImpl, 'Chat');
-  
+
+  return rivet.pluginNodeDefinition(nodeImpl, 'Mistral Chat');
+}

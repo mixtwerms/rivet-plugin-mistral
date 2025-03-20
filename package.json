@@ -1,25 +1,51 @@
 {
-  "name": "mistral-rivet-plugin",
-  "version": "0.1.0",
+  "name": "rivet-plugin-mistral",
+  "packageManager": "yarn@3.5.0",
+  "version": "0.1.2",
   "description": "Mistral AI plugin for Rivet",
   "license": "MIT",
-  "main": "dist/index.js",
+  "author": "Adrian Leverkuhn <mixtwerms@github.com>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mixtwerms/rivet-plugin-mistral.git"
+  },
+  "keywords": [
+    "rivet",
+    "rivet-plugin",
+    "mistral",
+    "ai",
+    "llm",
+    "language-model",
+    "mistral-ai"
+  ],
   "type": "module",
+  "main": "dist/bundle.js",
+  "module": "dist/bundle.js",
+  "rivet": {
+    "name": "Mistral AI",
+    "id": "rivet-plugin-mistral"
+  },
   "scripts": {
-    "build": "npx esbuild src/index.ts --bundle --outfile=dist/index.js --platform=neutral --format=esm --external:@ironclad/rivet-core --external:@ironclad/rivet-node --external:ts-dedent --external:nanoid --external:p-retry --external:ts-pattern",
-    "dev": "npx esbuild src/index.ts --bundle --outfile=dist/index.js --platform=neutral --format=esm --external:@ironclad/rivet-core --external:@ironclad/rivet-node --external:ts-dedent --external:nanoid --external:p-retry --external:ts-pattern --watch=forever & (while true; do yarn sync; sleep 2; done)",
-    "sync": "mkdir -p \"$HOME/Library/Application Support/com.ironcladapp.rivet/plugins/mistral-rivet-plugin-latest/package\" && cp -R dist \"$HOME/Library/Application Support/com.ironcladapp.rivet/plugins/mistral-rivet-plugin-latest/package/\" && cp package.json \"$HOME/Library/Application Support/com.ironcladapp.rivet/plugins/mistral-rivet-plugin-latest/package/\"",
-    "start": "yarn build && yarn sync"
+    "build": "tsc -b && tsx bundle.ts",
+    "dev": "run-p watch:tsc watch:esbuild:sync",
+    "watch:tsc": "tsc -b -w --preserveWatchOutput",
+    "watch:esbuild": "tsx bundle.ts --watch",
+    "watch:esbuild:sync": "tsx bundle.ts --watch --sync",
+    "sync": "tsx bundle.ts --sync"
+  },
+  "dependencies": {
+    "@ironclad/rivet-core": "^1.9.0",
+    "ts-pattern": "^5.0.0"
   },
   "devDependencies": {
     "esbuild": "^0.19.2",
+    "npm-run-all": "^4.1.5",
+    "recursive-copy": "^2.0.14",
+    "tsx": "^3.12.10",
     "typescript": "^5.2.2"
   },
-  "dependencies": {
-    "@ironclad/rivet-core": "^1.0.0",
-    "nanoid": "^4.0.0",
-    "p-retry": "^6.0.0",
-    "ts-dedent": "^2.2.0",
-    "ts-pattern": "^5.0.0"
-  }
+  "files": [
+    "dist",
+    "package.json"
+  ]
 }
