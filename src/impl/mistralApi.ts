@@ -43,3 +43,26 @@ export type ChatCompletionResponse = {
     total_tokens: number;
   };
 };
+
+// Add types for streaming response chunks
+export type ChatCompletionChunk = {
+  id: string;
+  object: 'chat.completion.chunk';
+  created: number;
+  model: string;
+  choices: Array<{
+    index: number;
+    delta: {
+      role?: string;
+      content?: string;
+      tool_calls?: ToolCall[];
+    };
+    finish_reason: 'stop' | 'length' | 'tool_calls' | null;
+  }>;
+  // Some chunks might include usage information
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+};

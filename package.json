@@ -1,10 +1,10 @@
 {
   "name": "rivet-plugin-mistral",
   "packageManager": "yarn@3.5.0",
-  "version": "0.1.2",
+  "version": "0.1.10",
   "description": "Mistral AI plugin for Rivet",
   "license": "MIT",
-  "author": "Adrian Leverkuhn <mixtwerms@github.com>",
+  "author": "Adrian Leverkuhn",
   "repository": {
     "type": "git",
     "url": "https://github.com/mixtwerms/rivet-plugin-mistral.git"

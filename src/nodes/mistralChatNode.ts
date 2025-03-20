@@ -54,11 +54,11 @@ export default function (rivet: typeof Rivet) {
         type: 'mistralChat',
         title: 'Mistral Chat',
         data: {
-          model: 'mistral-small-latest',
+          model: 'mistral-large-latest',
           useModelInput: false,
-          temperature: 0.7,
+          temperature: 0.5,
           useTemperatureInput: false,
-          maxTokens: 1024,
+          maxTokens: 4096,
           useMaxTokensInput: false,
           topP: 1,
           useTopPInput: false,
@@ -366,6 +366,16 @@ ${completionPrice}/1M completion tokens`;
           const decoder = new TextDecoder();
           let buffer = '';
           const responseParts: string[] = [];
+          
+          // Store all raw JSON chunks for analysis
+          const allChunks: string[] = [];
+          // Track if we've found token usage information
+          let tokenUsageFound = false;
+          let tokenUsage = {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0
+          };
 
           if (!reader) {
             throw new Error('No response body');
@@ -382,11 +392,23 @@ ${completionPrice}/1M completion tokens`;
             for (const line of lines) {
               if (line.trim() === '') continue;
               if (line.startsWith('data: ')) {
-                const data = line.slice(6);
-                if (data === '[DONE]') continue;
+                const dataContent = line.slice(6);
+                if (dataContent === '[DONE]') continue;
+                
+                // Store the raw chunk for later analysis
+                allChunks.push(dataContent);
+                
                 try {
-                  const json = JSON.parse(data);
-                  const content = json.choices[0]?.delta?.content;
+                  const jsonData = JSON.parse(dataContent);
+                  
+                  // Check if this chunk contains token usage information
+                  if (jsonData.usage && jsonData.usage.total_tokens) {
+                    console.log("Found token usage in streaming response:", jsonData.usage);
+                    tokenUsageFound = true;
+                    tokenUsage = jsonData.usage;
+                  }
+                  
+                  const content = jsonData.choices[0]?.delta?.content;
                   if (content) {
                     responseParts.push(content);
                     
@@ -415,6 +437,44 @@ ${completionPrice}/1M completion tokens`;
                       ],
                     };
 
+                    // If we've found token usage, include it in the partial outputs
+                    if (tokenUsageFound) {
+                      // Calculate approximate cost
+                      const modelInfo = mistralModels[model as MistralModels] || { 
+                        cost: { 
+                          prompt: { USD: "$0", EUR: "0 €" }, 
+                          completion: { USD: "$0", EUR: "0 €" } 
+                        } 
+                      };
+
+                      // Get the price for the selected currency
+                      const promptPriceStr = modelInfo.cost.prompt[data.currency];
+                      const completionPriceStr = modelInfo.cost.completion[data.currency];
+
+                      // Parse the cost values (removing currency symbols and converting to number)
+                      const promptCostPerMillion = parseFloat(promptPriceStr.replace(/[^0-9.]/g, ''));
+                      const completionCostPerMillion = completionPriceStr === '-' ? 0 : parseFloat(completionPriceStr.replace(/[^0-9.]/g, ''));
+
+                      // Calculate cost
+                      const promptCost = (tokenUsage.prompt_tokens / 1000000) * promptCostPerMillion;
+                      const completionCost = (tokenUsage.completion_tokens / 1000000) * completionCostPerMillion;
+                      const totalCostDollars = promptCost + completionCost;
+                      
+                      // Convert to cents and round to 4 decimal places
+                      const totalCostCents = Number((totalCostDollars * 100).toFixed(4));
+
+                      output['tokenDetails' as PortId] = {
+                        type: 'object',
+                        value: {
+                          prompt: tokenUsage.prompt_tokens,
+                          completion: tokenUsage.completion_tokens,
+                          total: tokenUsage.total_tokens,
+                          estimatedCostCents: totalCostCents,
+                          currency: data.currency
+                        }
+                      };
+                    }
+
                     context.onPartialOutputs?.(output);
                   }
                 } catch (e) {
@@ -424,19 +484,91 @@ ${completionPrice}/1M completion tokens`;
             }
           }
 
-          // For streaming, we don't have token information
-          output['tokenDetails' as PortId] = {
-            type: 'object',
-            value: {
-              note: "Token details not available in streaming mode",
-              prompt: 0,
-              completion: 0,
-              total: 0,
-              estimatedCostCents: 0,
-              currency: data.currency
+          // After stream is complete, try to find token usage in the collected chunks
+          if (!tokenUsageFound) {
+            console.log("Analyzing all chunks for token usage information...");
+            
+            // Log all chunks for debugging
+            console.log("All received chunks:", allChunks);
+            
+            // Try to find a chunk with usage information
+            for (const chunk of allChunks) {
+              try {
+                const json = JSON.parse(chunk);
+                if (json.usage && json.usage.total_tokens) {
+                  console.log("Found token usage in chunk analysis:", json.usage);
+                  tokenUsage = json.usage;
+                  tokenUsageFound = true;
+                  break;
+                }
+              } catch (e) {
+                // Skip chunks that can't be parsed
+                continue;
+              }
             }
-          };
+          }
+
+          // If we still don't have token usage, make a fallback calculation
+          if (!tokenUsageFound) {
+            console.log("Token usage not found in streaming response, using estimates");
+            
+            // Estimate completion tokens based on response length
+            // This is a very rough estimate and should be replaced with a better method
+            const fullResponse = responseParts.join('');
+            const estimatedCompletionTokens = Math.ceil(fullResponse.length / 4); // Very rough estimate
+            
+            // We don't know prompt tokens, so we'll use a placeholder
+            tokenUsage = {
+              prompt_tokens: 0, // Unknown
+              completion_tokens: estimatedCompletionTokens,
+              total_tokens: estimatedCompletionTokens // Incomplete total
+            };
+            
+            output['tokenDetails' as PortId] = {
+              type: 'object',
+              value: {
+                note: "Token details estimated - actual counts not available in streaming mode",
+                prompt: tokenUsage.prompt_tokens,
+                completion: tokenUsage.completion_tokens,
+                total: tokenUsage.total_tokens,
+                estimatedCostCents: 0, // Can't calculate accurately without prompt tokens
+                currency: data.currency
+              }
+            };
+          } else {
+            // Calculate cost with the found token usage
+            const modelInfo = mistralModels[model as MistralModels] || { 
+              cost: { 
+                prompt: { USD: "$0", EUR: "0 €" }, 
+                completion: { USD: "$0", EUR: "0 €" } 
+              } 
+            };
+
+            const promptPriceStr = modelInfo.cost.prompt[data.currency];
+            const completionPriceStr = modelInfo.cost.completion[data.currency];
+
+            const promptCostPerMillion = parseFloat(promptPriceStr.replace(/[^0-9.]/g, ''));
+            const completionCostPerMillion = completionPriceStr === '-' ? 0 : parseFloat(completionPriceStr.replace(/[^0-9.]/g, ''));
+
+            const promptCost = (tokenUsage.prompt_tokens / 1000000) * promptCostPerMillion;
+            const completionCost = (tokenUsage.completion_tokens / 1000000) * completionCostPerMillion;
+            const totalCostDollars = promptCost + completionCost;
+            
+            const totalCostCents = Number((totalCostDollars * 100).toFixed(4));
+
+            output['tokenDetails' as PortId] = {
+              type: 'object',
+              value: {
+                prompt: tokenUsage.prompt_tokens,
+                completion: tokenUsage.completion_tokens,
+                total: tokenUsage.total_tokens,
+                estimatedCostCents: totalCostCents,
+                currency: data.currency
+              }
+            };
+          }
         } else {
+          // Non-streaming mode - token information is directly available
           const json = await response.json();
           const content = json.choices[0]?.message?.content;
           const promptTokens = json.usage.prompt_tokens;

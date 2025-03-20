@@ -291,3 +291,19 @@ export function createUserMessage(content: string): UserChatMessage {
     message: content,
   };
 }
+
+export function estimateTokenCount(text: string): number {
+  // A very simple estimation - about 4 characters per token for English text
+  // This is a rough approximation and will vary by language and content
+  if (!text) return 0;
+  
+  // Count words (roughly 0.75 tokens per word)
+  const wordCount = text.split(/\s+/).length;
+  const wordTokens = wordCount * 0.75;
+  
+  // Count characters (roughly 0.25 tokens per character)
+  const charTokens = text.length * 0.25;
+  
+  // Average the two approaches for a slightly better estimate
+  return Math.ceil((wordTokens + charTokens) / 2);
+}
