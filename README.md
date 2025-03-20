@@ -13,7 +13,7 @@ A plugin for [Rivet](https://rivet.ironcladapp.com/) that adds support for Mistr
 
 ## Status
 
-This plugin is currently in beta.
+This plugin is currently in beta. Tested on Rivet 1.10.1.
 
 ## License
 
